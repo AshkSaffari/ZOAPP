@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Search, Filter, FileText, Building2, Download, Eye, File, FileImage, FileSpreadsheet } from 'lucide-react';
 import AccService from '../services/AccService';
 
 const DocsTab = () => {
@@ -10,11 +11,39 @@ const DocsTab = () => {
   const [projects, setProjects] = useState([]);
   const [selectedProjects, setSelectedProjects] = useState([]);
   const [searchScope, setSearchScope] = useState('all'); // 'all', 'project', 'hub'
+  const [fileTypeFilter, setFileTypeFilter] = useState('all'); // 'all', 'pdf', 'xlsx', 'docx', 'image'
+  const [filteredResults, setFilteredResults] = useState([]);
 
   // Load hubs on component mount
   useEffect(() => {
     loadHubs();
   }, []);
+
+  // Filter results based on file type
+  useEffect(() => {
+    if (fileTypeFilter === 'all') {
+      setFilteredResults(searchResults);
+    } else {
+      const filtered = searchResults.filter(result => {
+        const fileName = result.name?.toLowerCase() || '';
+        switch (fileTypeFilter) {
+          case 'pdf':
+            return fileName.endsWith('.pdf');
+          case 'xlsx':
+            return fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
+          case 'docx':
+            return fileName.endsWith('.docx') || fileName.endsWith('.doc');
+          case 'image':
+            return fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') || 
+                   fileName.endsWith('.png') || fileName.endsWith('.gif') || 
+                   fileName.endsWith('.bmp') || fileName.endsWith('.svg');
+          default:
+            return true;
+        }
+      });
+      setFilteredResults(filtered);
+    }
+  }, [searchResults, fileTypeFilter]);
 
   const loadHubs = async () => {
     try {
@@ -27,10 +56,22 @@ const DocsTab = () => {
 
   const loadProjects = async (hubId) => {
     try {
+      // Try to detect and set the correct region for this hub
+      await AccService.detectRegion(hubId);
       const projectsData = await AccService.getProjects(hubId);
       setProjects(projectsData);
     } catch (error) {
       console.error('Error loading projects:', error);
+      // If the first attempt fails, try with different regions
+      try {
+        console.log('🔄 Trying alternative region detection for hub:', hubId);
+        await AccService.debugAPACHubAccess(hubId);
+        const projectsData = await AccService.getProjects(hubId);
+        setProjects(projectsData);
+      } catch (retryError) {
+        console.error('❌ Failed to load projects after retry:', retryError);
+        throw retryError;
+      }
     }
   };
 
@@ -49,36 +90,54 @@ const DocsTab = () => {
       if (searchScope === 'all') {
         // Search across all hubs
         for (const hub of hubs) {
-          const hubProjects = await AccService.getProjects(hub.id);
-          for (const project of hubProjects) {
-            const projectResults = await searchProjectDocuments(project.id, searchTerm);
-            results = results.concat(projectResults.map(doc => ({
-              ...doc,
-              hubName: hub.name,
-              projectName: project.name
-            })));
+          try {
+            // Try to detect and set the correct region for this hub
+            await AccService.detectRegion(hub.id);
+            const hubProjects = await AccService.getProjects(hub.id);
+            for (const project of hubProjects) {
+              const projectResults = await searchProjectDocuments(project.id, searchTerm);
+              results = results.concat(projectResults.map(doc => ({
+                ...doc,
+                hubName: hub.name,
+                projectName: project.name
+              })));
+            }
+          } catch (error) {
+            console.warn(`⚠️ Failed to search hub ${hub.name} (${hub.id}):`, error.message);
+            // Continue with other hubs even if one fails
           }
         }
       } else if (searchScope === 'hub' && selectedHub) {
         // Search within selected hub
-        const hubProjects = await AccService.getProjects(selectedHub.id);
-        for (const project of hubProjects) {
-          const projectResults = await searchProjectDocuments(project.id, searchTerm);
-          results = results.concat(projectResults.map(doc => ({
-            ...doc,
-            hubName: selectedHub.name,
-            projectName: project.name
-          })));
+        try {
+          await AccService.detectRegion(selectedHub.id);
+          const hubProjects = await AccService.getProjects(selectedHub.id);
+          for (const project of hubProjects) {
+            const projectResults = await searchProjectDocuments(project.id, searchTerm);
+            results = results.concat(projectResults.map(doc => ({
+              ...doc,
+              hubName: selectedHub.name,
+              projectName: project.name
+            })));
+          }
+        } catch (error) {
+          console.error('Error searching selected hub:', error);
+          throw error;
         }
       } else if (searchScope === 'project' && selectedProjects.length > 0) {
         // Search within selected projects
         for (const project of selectedProjects) {
-          const projectResults = await searchProjectDocuments(project.id, searchTerm);
-          results = results.concat(projectResults.map(doc => ({
-            ...doc,
-            hubName: project.hubName || 'Unknown',
-            projectName: project.name
-          })));
+          try {
+            const projectResults = await searchProjectDocuments(project.id, searchTerm);
+            results = results.concat(projectResults.map(doc => ({
+              ...doc,
+              hubName: project.hubName || 'Unknown',
+              projectName: project.name
+            })));
+          } catch (error) {
+            console.warn(`⚠️ Failed to search project ${project.name}:`, error.message);
+            // Continue with other projects even if one fails
+          }
         }
       }
 
@@ -190,137 +249,279 @@ const DocsTab = () => {
   };
 
   return (
-    <div className="docs-tab">
-      <h2>Document Search</h2>
-      
-      {/* Search Controls */}
-      <div className="search-controls">
-        <div className="search-input-group">
-          <input
-            type="text"
-            placeholder="Enter document name to search..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="search-input"
-          />
-          <button 
-            onClick={searchDocuments} 
-            disabled={isSearching}
-            className="search-button"
-          >
-            {isSearching ? 'Searching...' : 'Search'}
-          </button>
+    <div className="space-y-6">
+      <div className="bg-white shadow rounded-lg">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h2 className="text-xl font-semibold text-gray-900 flex items-center">
+            <FileText className="h-5 w-5 mr-2 text-blue-600" />
+            Document Search
+          </h2>
         </div>
-
-        {/* Search Scope Selection */}
-        <div className="search-scope">
-          <label>
-            <input
-              type="radio"
-              value="all"
-              checked={searchScope === 'all'}
-              onChange={(e) => setSearchScope(e.target.value)}
-            />
-            Search All Accounts
-          </label>
-          <label>
-            <input
-              type="radio"
-              value="hub"
-              checked={searchScope === 'hub'}
-              onChange={(e) => setSearchScope(e.target.value)}
-            />
-            Search Hub
-          </label>
-          <label>
-            <input
-              type="radio"
-              value="project"
-              checked={searchScope === 'project'}
-              onChange={(e) => setSearchScope(e.target.value)}
-            />
-            Search Projects
-          </label>
-        </div>
-
-        {/* Hub Selection */}
-        {searchScope === 'hub' && (
-          <div className="hub-selection">
-            <select 
-              value={selectedHub?.id || ''} 
-              onChange={(e) => handleHubChange(e.target.value)}
-              className="hub-select"
-            >
-              <option value="">Select Hub</option>
-              {hubs.map(hub => (
-                <option key={hub.id} value={hub.id}>{hub.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* Project Selection */}
-        {searchScope === 'project' && selectedHub && (
-          <div className="project-selection">
-            <h4>Select Projects to Search:</h4>
-            <div className="project-list">
-              {projects.map(project => (
-                <label key={project.id} className="project-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={selectedProjects.some(p => p.id === project.id)}
-                    onChange={() => handleProjectToggle(project)}
-                  />
-                  {project.name}
-                </label>
-              ))}
+        
+        <div className="p-6">
+          {/* Search Controls */}
+          <div className="space-y-6">
+            {/* Search Input */}
+            <div className="flex gap-4">
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search documents by name (partial matching)..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              <button 
+                onClick={searchDocuments} 
+                disabled={isSearching || !searchTerm.trim()}
+                className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+              >
+                {isSearching ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Searching...
+                  </>
+                ) : (
+                  <>
+                    <Search className="h-4 w-4 mr-2" />
+                    Search
+                  </>
+                )}
+              </button>
             </div>
+
+            {/* Search Scope and Filters */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Search Scope */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-3">Search Scope</label>
+                <div className="space-y-2">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="all"
+                      checked={searchScope === 'all'}
+                      onChange={(e) => setSearchScope(e.target.value)}
+                      className="mr-2 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700">All Accounts</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="hub"
+                      checked={searchScope === 'hub'}
+                      onChange={(e) => setSearchScope(e.target.value)}
+                      className="mr-2 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700">Specific Hub</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="project"
+                      checked={searchScope === 'project'}
+                      onChange={(e) => setSearchScope(e.target.value)}
+                      className="mr-2 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700">Specific Projects</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* File Type Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-3">File Type Filter</label>
+                <select
+                  value={fileTypeFilter}
+                  onChange={(e) => setFileTypeFilter(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="all">All File Types</option>
+                  <option value="pdf">PDF Documents</option>
+                  <option value="xlsx">Excel Spreadsheets</option>
+                  <option value="docx">Word Documents</option>
+                  <option value="image">Images</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Hub Selection */}
+            {searchScope === 'hub' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Select Hub</label>
+                <select 
+                  value={selectedHub?.id || ''} 
+                  onChange={(e) => handleHubChange(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">Select Hub</option>
+                  {hubs.map(hub => (
+                    <option key={hub.id} value={hub.id}>{hub.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Project Selection */}
+            {searchScope === 'project' && selectedHub && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-3">
+                  Select Projects to Search from {selectedHub.name}
+                </label>
+                <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-md p-3 space-y-2">
+                  {projects.map(project => (
+                    <label key={project.id} className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedProjects.some(p => p.id === project.id)}
+                        onChange={() => handleProjectToggle(project)}
+                        className="mr-2 text-blue-600 focus:ring-blue-500"
+                      />
+                      <div className="flex-1">
+                        <span className="text-sm font-medium text-gray-900">{project.name}</span>
+                        <div className="text-xs text-gray-500">
+                          Hub: {selectedHub.name} | Type: {project.type?.split(':').pop() || 'Project'}
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Search Results */}
-      <div className="search-results">
-        <h3>Search Results ({searchResults.length})</h3>
-        
-        {searchResults.length > 0 ? (
-          <div className="results-table">
-            <table>
-              <thead>
+      {searchResults.length > 0 && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-medium text-gray-900 flex items-center">
+              <FileText className="h-5 w-5 mr-2 text-gray-600" />
+              Search Results ({filteredResults.length} of {searchResults.length})
+            </h3>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
                 <tr>
-                  <th>Document Name</th>
-                  <th>Project</th>
-                  <th>Hub</th>
-                  <th>Created By</th>
-                  <th>Last Modified</th>
-                  <th>Actions</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Document
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Project
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Hub
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Created By
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Last Modified
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
               </thead>
-              <tbody>
-                {searchResults.map((doc, index) => (
-                  <tr key={`${doc.id}-${index}`}>
-                    <td>{doc.displayName || doc.name}</td>
-                    <td>{doc.projectName}</td>
-                    <td>{doc.hubName}</td>
-                    <td>{doc.createUserName}</td>
-                    <td>{new Date(doc.lastModifiedTime).toLocaleDateString()}</td>
-                    <td>
-                      <button 
-                        onClick={() => downloadDocument(doc)}
-                        className="download-button"
-                      >
-                        Download
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredResults.map((doc, index) => {
+                  const fileName = doc.displayName || doc.name || 'Unknown';
+                  const fileExtension = fileName.split('.').pop()?.toLowerCase();
+                  
+                  const getFileIcon = (ext) => {
+                    switch (ext) {
+                      case 'pdf':
+                        return <FileText className="h-4 w-4 text-red-500" />;
+                      case 'xlsx':
+                      case 'xls':
+                        return <FileSpreadsheet className="h-4 w-4 text-green-500" />;
+                      case 'docx':
+                      case 'doc':
+                        return <FileText className="h-4 w-4 text-blue-500" />;
+                      case 'jpg':
+                      case 'jpeg':
+                      case 'png':
+                      case 'gif':
+                      case 'bmp':
+                      case 'svg':
+                        return <FileImage className="h-4 w-4 text-purple-500" />;
+                      default:
+                        return <File className="h-4 w-4 text-gray-500" />;
+                    }
+                  };
+
+                  return (
+                    <tr key={`${doc.id}-${index}`} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          {getFileIcon(fileExtension)}
+                          <div className="ml-3">
+                            <div className="text-sm font-medium text-gray-900">
+                              {fileName}
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              {fileExtension?.toUpperCase() || 'FILE'}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {doc.projectName}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {doc.hubName}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {doc.createUserName || 'Unknown'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {doc.lastModifiedTime ? new Date(doc.lastModifiedTime).toLocaleDateString() : 'Unknown'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <button 
+                          onClick={() => downloadDocument(doc)}
+                          className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <Download className="h-3 w-3 mr-1" />
+                          Download
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            
+            {filteredResults.length === 0 && searchResults.length > 0 && (
+              <div className="text-center py-8">
+                <Filter className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-sm font-medium text-gray-900">No files match the selected filter</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Try changing the file type filter to see more results
+                </p>
+              </div>
+            )}
           </div>
-        ) : (
-          <p>No documents found. Try a different search term.</p>
-        )}
-      </div>
+        </div>
+      )}
+
+      {searchResults.length === 0 && searchTerm && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="text-center py-12">
+            <FileText className="mx-auto h-12 w-12 text-gray-400" />
+            <h3 className="mt-2 text-sm font-medium text-gray-900">No documents found</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Try adjusting your search terms or check different hubs/projects
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

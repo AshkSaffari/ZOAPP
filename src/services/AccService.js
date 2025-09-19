@@ -34,7 +34,7 @@ class AccService {
         console.log('🇦🇺 Region set to AUS - using Australian endpoints');
         break;
       case 'APAC':
-        this.baseURL = 'https://developer.api.autodesk.com';Y
+        this.baseURL = 'https://developer.api.autodesk.com';
         console.log('🌏 Region set to APAC - using APAC endpoints');
         break;
       case 'EMEA':
@@ -662,6 +662,13 @@ class AccService {
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
 
+      // Handle empty responses (like DELETE operations)
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.log(`✅ Success response (no JSON content): ${response.status}`);
+        return { success: true, status: response.status };
+      }
+      
       const result = await response.json();
       console.log(`✅ Success response:`, result);
       return result;
@@ -3054,7 +3061,8 @@ class AccService {
       const costContainerId = await this.getCostContainerId(projectId);
       console.log(`⏰ Deleting timesheet for project: ${projectId}, container: ${costContainerId}`);
       
-      await this.makeRequest(`/cost/v1/containers/${costContainerId}/time-sheets/${timesheetId}`, 'DELETE');
+      const response = await this.makeRequest(`/cost/v1/containers/${costContainerId}/time-sheets/${timesheetId}`, 'DELETE');
+      console.log(`✅ Timesheet deleted successfully:`, response);
       return true;
     } catch (error) {
       console.error('❌ Error deleting timesheet:', error);

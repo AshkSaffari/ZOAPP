@@ -552,6 +552,38 @@ function App() {
                     Image
                   </div>
                 </button>
+                <button
+                  onClick={() => {
+                    console.log('🖱️ Docs tab clicked');
+                    setActiveTab('docs');
+                  }}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'docs'
+                      ? 'border-autodesk-blue text-autodesk-blue'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <FileText className="h-4 w-4 mr-2" />
+                    Docs
+                  </div>
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('🖱️ Timesheet tab clicked');
+                    setActiveTab('timesheets');
+                  }}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'timesheets'
+                      ? 'border-autodesk-blue text-autodesk-blue'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <FileText className="h-4 w-4 mr-2" />
+                    Timesheet
+                  </div>
+                </button>
               </nav>
             </div>
           </div>
@@ -633,6 +665,18 @@ function App() {
             <div className="bg-white shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
                 <ImageTab projects={projects} credentials={credentials} />
+              </div>
+            </div>
+          ) : activeTab === 'docs' ? (
+            <div className="bg-white shadow rounded-lg">
+              <div className="px-4 py-5 sm:p-6">
+                <DocsTab projects={projects} credentials={credentials} />
+              </div>
+            </div>
+          ) : activeTab === 'timesheets' ? (
+            <div className="bg-white shadow rounded-lg">
+              <div className="px-4 py-5 sm:p-6">
+                <TimesheetTab projects={projects} credentials={credentials} />
               </div>
             </div>
           ) : null}

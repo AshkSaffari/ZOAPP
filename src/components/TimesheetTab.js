@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Search, Filter, Calendar, FileText, Building2, ChevronDown, ChevronRight, Download } from 'lucide-react';
 import AccService from '../services/AccService';
+import jsPDF from 'jspdf';
 
 const TimesheetTab = () => {
   const [selectedHub, setSelectedHub] = useState(null);
@@ -9,6 +11,8 @@ const TimesheetTab = () => {
   const [budgets, setBudgets] = useState([]);
   const [timesheets, setTimesheets] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filteredProjects, setFilteredProjects] = useState([]);
 
   // Form state for new timesheet
   const [newTimesheet, setNewTimesheet] = useState({
@@ -37,14 +41,40 @@ const TimesheetTab = () => {
   const loadProjects = async (hubId) => {
     try {
       setIsLoading(true);
+      // Try to detect and set the correct region for this hub
+      await AccService.detectRegion(hubId);
       const projectsData = await AccService.getProjects(hubId);
       setProjects(projectsData);
+      setFilteredProjects(projectsData);
     } catch (error) {
       console.error('Error loading projects:', error);
+      // If the first attempt fails, try with different regions
+      try {
+        console.log('🔄 Trying alternative region detection for hub:', hubId);
+        await AccService.debugAPACHubAccess(hubId);
+        const projectsData = await AccService.getProjects(hubId);
+        setProjects(projectsData);
+        setFilteredProjects(projectsData);
+      } catch (retryError) {
+        console.error('❌ Failed to load projects after retry:', retryError);
+        throw retryError;
+      }
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Filter projects based on search term
+  useEffect(() => {
+    if (!searchTerm.trim()) {
+      setFilteredProjects(projects);
+    } else {
+      const filtered = projects.filter(project =>
+        project.name.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+      setFilteredProjects(filtered);
+    }
+  }, [searchTerm, projects]);
 
   const loadBudgets = async (projectId) => {
     try {
@@ -157,6 +187,18 @@ const TimesheetTab = () => {
   const updateTimesheet = async (timesheetId, updates) => {
     try {
       setIsLoading(true);
+      console.log('🔄 Updating timesheet:', { timesheetId, updates, projectId: selectedProject.id });
+      
+      // First, let's refresh the timesheet data to ensure we have the latest IDs
+      await loadTimesheets(selectedProject.id);
+      
+      // Find the timesheet with the matching ID
+      const timesheet = timesheets.find(t => t.id === timesheetId);
+      if (!timesheet) {
+        throw new Error(`Timesheet with ID ${timesheetId} not found. Please refresh the page and try again.`);
+      }
+      
+      console.log('📋 Found timesheet for update:', timesheet);
       await AccService.updateTimesheet(selectedProject.id, timesheetId, updates);
       await loadTimesheets(selectedProject.id);
       alert('Timesheet updated successfully!');
@@ -186,94 +228,293 @@ const TimesheetTab = () => {
     }
   };
 
-  return (
-    <div className="timesheet-tab">
-      <h2>Timesheet Management</h2>
-      
-      {/* Project Selection */}
-      <div className="project-selection">
-        <div className="selection-group">
-          <label>Select Hub:</label>
-          <select 
-            value={selectedHub?.id || ''} 
-            onChange={(e) => handleHubChange(e.target.value)}
-            className="hub-select"
-          >
-            <option value="">Select Hub</option>
-            {hubs.map(hub => (
-              <option key={hub.id} value={hub.id}>{hub.name}</option>
-            ))}
-          </select>
-        </div>
+  const exportTimesheetToPDF = () => {
+    if (!selectedProject || timesheets.length === 0) {
+      alert('No timesheet data to export');
+      return;
+    }
 
-        {selectedHub && (
-          <div className="selection-group">
-            <label>Select Project:</label>
-            <select 
-              value={selectedProject?.id || ''} 
-              onChange={(e) => handleProjectChange(e.target.value)}
-              className="project-select"
-            >
-              <option value="">Select Project</option>
-              {projects.map(project => (
-                <option key={project.id} value={project.id}>{project.name}</option>
-              ))}
-            </select>
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    let yPosition = 20;
+
+    // Header
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Timesheet Report', pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 10;
+
+    // Project Information
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Project: ${selectedProject.name}`, 20, yPosition);
+    yPosition += 8;
+    doc.text(`Project ID: ${selectedProject.id}`, 20, yPosition);
+    yPosition += 8;
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 20, yPosition);
+    yPosition += 15;
+
+    // Table Headers
+    const headers = ['Budget Code', 'Start Date', 'End Date', 'Input Qty (Hours)', 'Output Qty', 'Description'];
+    const columnWidths = [30, 25, 25, 30, 25, 35];
+    let xPosition = 20;
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    headers.forEach((header, index) => {
+      doc.text(header, xPosition, yPosition);
+      xPosition += columnWidths[index];
+    });
+    yPosition += 8;
+
+    // Table Data
+    doc.setFont('helvetica', 'normal');
+    timesheets.forEach((timesheet) => {
+      if (yPosition > pageHeight - 30) {
+        doc.addPage();
+        yPosition = 20;
+      }
+
+      xPosition = 20;
+      const rowData = [
+        timesheet.budgetCode || '',
+        timesheet.startDate || '',
+        timesheet.endDate || '',
+        timesheet.inputQuantity || '0',
+        timesheet.outputQuantity || '0',
+        timesheet.description || ''
+      ];
+
+      rowData.forEach((data, index) => {
+        const text = String(data).substring(0, 20); // Truncate long text
+        doc.text(text, xPosition, yPosition);
+        xPosition += columnWidths[index];
+      });
+      yPosition += 8;
+    });
+
+    // Summary
+    yPosition += 10;
+    doc.setFont('helvetica', 'bold');
+    doc.text('Summary:', 20, yPosition);
+    yPosition += 8;
+
+    const totalInput = timesheets.reduce((sum, t) => sum + (parseFloat(t.inputQuantity) || 0), 0);
+    const totalOutput = timesheets.reduce((sum, t) => sum + (parseFloat(t.outputQuantity) || 0), 0);
+
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Total Input Hours: ${totalInput.toFixed(2)}`, 20, yPosition);
+    yPosition += 6;
+    doc.text(`Total Output: ${totalOutput.toFixed(2)}`, 20, yPosition);
+    yPosition += 6;
+    doc.text(`Productivity Rate: ${totalInput > 0 ? (totalOutput / totalInput).toFixed(2) : 'N/A'} units/hour`, 20, yPosition);
+
+    // Save the PDF
+    doc.save(`timesheet-${selectedProject.name.replace(/[^a-z0-9]/gi, '_')}-${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white shadow rounded-lg">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h2 className="text-xl font-semibold text-gray-900 flex items-center">
+            <Calendar className="h-5 w-5 mr-2 text-blue-600" />
+            Timesheet Management
+          </h2>
+        </div>
+        
+        <div className="p-6">
+          {/* Hub and Project Selection */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Select Hub
+              </label>
+              <select 
+                value={selectedHub?.id || ''} 
+                onChange={(e) => handleHubChange(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">Select Hub</option>
+                {hubs.map(hub => (
+                  <option key={hub.id} value={hub.id}>{hub.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {selectedHub && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Search Projects
+                </label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search projects..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </div>
+            )}
           </div>
-        )}
+
+          {/* Projects Table */}
+          {selectedHub && (
+            <div className="bg-gray-50 rounded-lg p-4">
+              <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                <Building2 className="h-5 w-5 mr-2 text-gray-600" />
+                Projects ({filteredProjects.length})
+              </h3>
+              
+              {isLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Project Name
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Type
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {filteredProjects.map((project) => (
+                        <tr 
+                          key={project.id}
+                          className={`hover:bg-gray-50 cursor-pointer ${
+                            selectedProject?.id === project.id ? 'bg-blue-50' : ''
+                          }`}
+                          onClick={() => handleProjectChange(project.id)}
+                        >
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <FileText className="h-4 w-4 text-gray-400 mr-3" />
+                              <div>
+                                <div className="text-sm font-medium text-gray-900">
+                                  {project.name}
+                                </div>
+                                <div className="text-sm text-gray-500">
+                                  ID: {project.id}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                              {project.type?.split(':').pop() || 'Project'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {selectedProject?.id === project.id ? (
+                              <span className="text-blue-600 font-medium">Selected</span>
+                            ) : (
+                              <span className="text-gray-400">Click to select</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  
+                  {filteredProjects.length === 0 && (
+                    <div className="text-center py-8">
+                      <FileText className="mx-auto h-12 w-12 text-gray-400" />
+                      <h3 className="mt-2 text-sm font-medium text-gray-900">No projects found</h3>
+                      <p className="mt-1 text-sm text-gray-500">
+                        {searchTerm ? 'Try adjusting your search terms' : 'No projects available in this hub'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {selectedProject && (
         <>
           {/* Create New Timesheet */}
-          <div className="create-timesheet">
-            <h3>Create New Timesheet</h3>
-            <form onSubmit={submitTimesheet} className="timesheet-form">
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Budget Code *</label>
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900 flex items-center">
+                <FileText className="h-5 w-5 mr-2 text-blue-600" />
+                Create New Timesheet
+              </h3>
+            </div>
+            <div className="p-6">
+              <form onSubmit={submitTimesheet} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Budget Code *</label>
                   <select
                     name="budgetCode"
                     value={newTimesheet.budgetCode}
                     onChange={handleInputChange}
                     required
-                    className="budget-select"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="">Select Budget</option>
-                    {budgets.map(budget => (
-                      <option key={budget.id} value={budget.budgetCode || budget.code}>
-                        {budget.name} ({budget.budgetCode || budget.code})
-                      </option>
-                    ))}
+                    {budgets.map(budget => {
+                      const unit = budget.unitOfOutput || budget.unit || budget.unitOfMeasure || 'units';
+                      return (
+                        <option key={budget.id} value={budget.budgetCode || budget.code}>
+                          {budget.name} ({budget.budgetCode || budget.code}) - {unit}
+                        </option>
+                      );
+                    })}
                   </select>
+                  {newTimesheet.budgetCode && (
+                    <p className="mt-1 text-sm text-gray-500">
+                      Unit of Output: {(() => {
+                        const selectedBudget = budgets.find(b => (b.budgetCode || b.code) === newTimesheet.budgetCode);
+                        return selectedBudget?.unitOfOutput || selectedBudget?.unit || selectedBudget?.unitOfMeasure || 'units';
+                      })()}
+                    </p>
+                  )}
                 </div>
 
-                <div className="form-group">
-                  <label>Start Date *</label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Start Date *</label>
                   <input
                     type="date"
                     name="startDate"
                     value={newTimesheet.startDate}
                     onChange={handleInputChange}
                     required
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
 
-                <div className="form-group">
-                  <label>End Date *</label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">End Date *</label>
                   <input
                     type="date"
                     name="endDate"
                     value={newTimesheet.endDate}
                     onChange={handleInputChange}
                     required
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Input Quantity (Hours)</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Input Quantity (Hours)</label>
                   <input
                     type="number"
                     name="inputQuantity"
@@ -281,11 +522,17 @@ const TimesheetTab = () => {
                     onChange={handleInputChange}
                     step="0.1"
                     min="0"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
 
-                <div className="form-group">
-                  <label>Output Quantity</label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Output Quantity {newTimesheet.budgetCode ? `(${(() => {
+                      const selectedBudget = budgets.find(b => (b.budgetCode || b.code) === newTimesheet.budgetCode);
+                      return selectedBudget?.unitOfOutput || selectedBudget?.unit || 'units';
+                    })()})` : ''}
+                  </label>
                   <input
                     type="number"
                     name="outputQuantity"
@@ -293,104 +540,175 @@ const TimesheetTab = () => {
                     onChange={handleInputChange}
                     step="0.1"
                     min="0"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
               </div>
 
-              <div className="form-group">
-                <label>Description</label>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
                 <textarea
                   name="description"
                   value={newTimesheet.description}
                   onChange={handleInputChange}
                   rows="3"
                   placeholder="Enter timesheet description..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
 
-              <button type="submit" disabled={isLoading} className="submit-button">
-                {isLoading ? 'Creating...' : 'Create Timesheet'}
-              </button>
-            </form>
+              <div className="flex gap-4 justify-end">
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to save this timesheet data to ACC performance tracking?')) {
+                      document.querySelector('form').requestSubmit();
+                    }
+                  }}
+                  disabled={isLoading}
+                  className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                >
+                  {isLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="h-4 w-4 mr-2" />
+                      Confirm & Save to ACC
+                    </>
+                  )}
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isLoading}
+                  className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                >
+                  {isLoading ? 'Creating...' : 'Create Timesheet'}
+                </button>
+              </div>
+              </form>
+            </div>
           </div>
 
           {/* Existing Timesheets */}
-          <div className="existing-timesheets">
-            <h3>Existing Timesheets ({timesheets.length})</h3>
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-gray-900 flex items-center">
+                  <FileText className="h-5 w-5 mr-2 text-blue-600" />
+                  Existing Timesheets ({timesheets.length})
+                </h3>
+                {timesheets.length > 0 && (
+                  <button
+                    onClick={exportTimesheetToPDF}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Export to PDF
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="p-6">
             
             {timesheets.length > 0 ? (
-              <div className="timesheets-table">
-                <table>
-                  <thead>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
                     <tr>
-                      <th>Budget Code</th>
-                      <th>Start Date</th>
-                      <th>End Date</th>
-                      <th>Input Qty</th>
-                      <th>Output Qty</th>
-                      <th>Created By</th>
-                      <th>Actions</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Budget Code</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Start Date</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">End Date</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Input Qty (Hours)</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Output Qty</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit of Output</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Productivity Rate</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {timesheets.map(timesheet => (
-                      <tr key={timesheet.id}>
-                        <td>{timesheet.budgetCode}</td>
-                        <td>{new Date(timesheet.startDate).toLocaleDateString()}</td>
-                        <td>{new Date(timesheet.endDate).toLocaleDateString()}</td>
-                        <td>{timesheet.inputQuantity}</td>
-                        <td>{timesheet.outputQuantity}</td>
-                        <td>{timesheet.creatorId}</td>
-                        <td>
-                          <button 
-                            onClick={() => updateTimesheet(timesheet.id, {
-                              inputQuantity: timesheet.inputQuantity + 1
-                            })}
-                            className="update-button"
-                          >
-                            Update
-                          </button>
-                          <button 
-                            onClick={() => deleteTimesheet(timesheet.id)}
-                            className="delete-button"
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {timesheets.map(timesheet => {
+                      const inputQty = parseFloat(timesheet.inputQuantity) || 0;
+                      const outputQty = parseFloat(timesheet.outputQuantity) || 0;
+                      const productivityRate = inputQty > 0 ? (outputQty / inputQty).toFixed(2) : 'N/A';
+                      
+                            // Find the budget to get unit of output
+                            const budget = budgets.find(b => (b.budgetCode || b.code) === timesheet.budgetCode);
+                            const unitOfOutput = budget?.unitOfOutput || budget?.unit || budget?.unitOfMeasure || 'units';
+                      
+                      return (
+                        <tr key={timesheet.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {timesheet.budgetCode}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {new Date(timesheet.startDate).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {new Date(timesheet.endDate).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {inputQty.toFixed(2)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {outputQty.toFixed(2)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {unitOfOutput}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {productivityRate} {unitOfOutput}/hour
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            <div className="flex space-x-2">
+                              <button 
+                                onClick={() => {
+                                  if (timesheet.id) {
+                                    updateTimesheet(timesheet.id, {
+                                      inputQuantity: inputQty + 1
+                                    });
+                                  } else {
+                                    alert('Invalid timesheet ID. Please refresh the page and try again.');
+                                  }
+                                }}
+                                className="text-blue-600 hover:text-blue-900 text-xs"
+                              >
+                                Update
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  if (timesheet.id) {
+                                    deleteTimesheet(timesheet.id);
+                                  } else {
+                                    alert('Invalid timesheet ID. Please refresh the page and try again.');
+                                  }
+                                }}
+                                className="text-red-600 hover:text-red-900 text-xs"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <p>No timesheets found for this project.</p>
+              <div className="text-center py-8">
+                <FileText className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-sm font-medium text-gray-900">No timesheets found</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Create a new timesheet to get started with performance tracking
+                </p>
+              </div>
             )}
+            </div>
           </div>
 
-          {/* Budget Performance Summary */}
-          {budgets.length > 0 && (
-            <div className="budget-performance">
-              <h3>Budget Performance Summary</h3>
-              <div className="performance-grid">
-                {budgets.map(budget => {
-                  const budgetTimesheets = timesheets.filter(t => t.budgetCode === (budget.budgetCode || budget.code));
-                  const totalInputQty = budgetTimesheets.reduce((sum, t) => sum + (parseFloat(t.inputQuantity) || 0), 0);
-                  const totalOutputQty = budgetTimesheets.reduce((sum, t) => sum + (parseFloat(t.outputQuantity) || 0), 0);
-                  
-                  return (
-                    <div key={budget.id} className="performance-card">
-                      <h4>{budget.name}</h4>
-                      <p><strong>Code:</strong> {budget.budgetCode || budget.code}</p>
-                      <p><strong>Total Input Hours:</strong> {totalInputQty.toFixed(2)}</p>
-                      <p><strong>Total Output:</strong> {totalOutputQty.toFixed(2)}</p>
-                      <p><strong>Performance Ratio:</strong> {totalInputQty > 0 ? (totalOutputQty / totalInputQty).toFixed(2) : 'N/A'}</p>
-                      <p><strong>Timesheet Entries:</strong> {budgetTimesheets.length}</p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </>
       )}
 
