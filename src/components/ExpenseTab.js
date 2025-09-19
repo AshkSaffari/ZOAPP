@@ -36,6 +36,13 @@ const ExpenseTab = ({ projects, credentials }) => {
       for (const project of projects) {
         try {
           console.log(`💰 Loading expenses for project: ${project.name} (${project.id})`);
+          
+          // Detect region for this project's hub
+          if (project.relationships?.hub?.data?.id) {
+            console.log(`🔍 Detecting region for project ${project.name} hub: ${project.relationships.hub.data.id}`);
+            await AccService.detectRegion(project.relationships.hub.data.id);
+          }
+          
           const expenses = await AccService.getExpenses(project.id);
           
           // For each expense, fetch its items to get actual amounts
@@ -53,8 +60,32 @@ const ExpenseTab = ({ projects, credentials }) => {
                     allKeys: Object.keys(items[0] || {}),
                     attributesKeys: items[0]?.attributes ? Object.keys(items[0].attributes) : 'No attributes'
                   });
+                  
+                  // Debug: Check for amount fields
+                  const firstItem = items[0];
+                  console.log(`💰 Amount fields in first item:`, {
+                    amount: firstItem.attributes?.amount,
+                    totalAmount: firstItem.attributes?.totalAmount,
+                    unitAmount: firstItem.attributes?.unitAmount,
+                    quantity: firstItem.attributes?.quantity,
+                    allAttributes: firstItem.attributes
+                  });
                 } else {
                   console.log(`⚠️ No items found for expense ${expense.id}`);
+                }
+
+                // Load attachments for this expense
+                try {
+                  const attachments = await AccService.getExpenseAttachments(project.id, expense.id);
+                  console.log(`📎 Found ${attachments?.length || 0} attachments for expense ${expense.id}`);
+                  
+                  // Update local state with loaded attachments
+                  setExpenseAttachments(prev => ({
+                    ...prev,
+                    [expense.id]: attachments || []
+                  }));
+                } catch (attachmentError) {
+                  console.error(`❌ Error loading attachments for expense ${expense.id}:`, attachmentError);
                 }
                 
                 // Calculate total amount from items
@@ -241,7 +272,7 @@ const ExpenseTab = ({ projects, credentials }) => {
     project.type?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Handle file attachment
+  // Handle file attachment and upload to ACC
   const handleFileAttachment = async (expenseId, projectId) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -255,37 +286,61 @@ const ExpenseTab = ({ projects, credentials }) => {
       setUploadingFiles(prev => ({ ...prev, [expenseId]: true }));
 
       try {
-        // For now, we'll store the files locally and show them in the UI
-        // In a real implementation, you would upload these to ACC
-        const fileData = await Promise.all(
-          files.map(file => new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve({
-              name: file.name,
+        console.log('🚀 Starting file upload process...', { expenseId, projectId, fileCount: files.length });
+        
+        // Upload each file to ACC
+        const uploadPromises = files.map(async (file, index) => {
+          try {
+            console.log(`📤 Uploading file ${index + 1}/${files.length}: ${file.name}`);
+            const fileName = `${expenseId}_${file.name}`;
+            const result = await AccService.uploadExpenseAttachment(projectId, expenseId, file, fileName);
+            console.log(`✅ File ${index + 1} uploaded successfully:`, result);
+            return {
+              ...result,
+              originalName: file.name,
               size: file.size,
-              type: file.type,
-              data: reader.result
-            });
-            reader.readAsDataURL(file);
-          }))
-        );
+              type: file.type
+            };
+          } catch (fileError) {
+            console.error(`❌ Error uploading file ${file.name}:`, fileError);
+            throw new Error(`Failed to upload ${file.name}: ${fileError.message}`);
+          }
+        });
 
+        const uploadResults = await Promise.all(uploadPromises);
+        console.log('🎉 All files uploaded successfully:', uploadResults);
+
+        // Update local state with uploaded files
         setExpenseAttachments(prev => ({
           ...prev,
-          [expenseId]: [...(prev[expenseId] || []), ...fileData]
+          [expenseId]: [...(prev[expenseId] || []), ...uploadResults]
         }));
 
         setSuccess(true);
         setTimeout(() => setSuccess(false), 3000);
       } catch (err) {
-        console.error('Error attaching files:', err);
-        setError('Failed to attach files');
+        console.error('❌ Error uploading files to ACC:', err);
+        setError('Failed to upload files to ACC: ' + err.message);
+        alert('Upload failed: ' + err.message);
       } finally {
         setUploadingFiles(prev => ({ ...prev, [expenseId]: false }));
       }
     };
 
     input.click();
+  };
+
+  // Load existing attachments for an expense
+  const loadExpenseAttachments = async (expenseId, projectId) => {
+    try {
+      const attachments = await AccService.getExpenseAttachments(projectId, expenseId);
+      setExpenseAttachments(prev => ({
+        ...prev,
+        [expenseId]: attachments
+      }));
+    } catch (error) {
+      console.error('Error loading expense attachments:', error);
+    }
   };
 
   // Remove file attachment
@@ -568,10 +623,10 @@ const ExpenseTab = ({ projects, credentials }) => {
                           <button
                             onClick={() => handleFileAttachment(expense.id, project.id)}
                             disabled={isUploading}
-                            className="flex items-center px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                            className="flex items-center px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
                           >
                             <Upload className="h-3 w-3 mr-1" />
-                            {isUploading ? 'Uploading...' : 'Attach Files'}
+                            {isUploading ? 'Pushing to ACC...' : 'Push to ACC'}
                           </button>
                         </div>
 
@@ -583,18 +638,37 @@ const ExpenseTab = ({ projects, credentials }) => {
                                 <div className="flex items-center space-x-2">
                                   <Paperclip className="h-3 w-3 text-gray-400" />
                                   <span className="text-xs text-gray-600 truncate">
-                                    {file.name}
+                                    {file.originalName || file.name}
                                   </span>
                                   <span className="text-xs text-gray-400">
                                     ({(file.size / 1024).toFixed(1)} KB)
                                   </span>
+                                  {file.success && (
+                                    <span className="text-xs text-green-600 font-medium">
+                                      ✓ Uploaded to ACC
+                                    </span>
+                                  )}
                                 </div>
-                                <button
-                                  onClick={() => handleRemoveAttachment(expense.id, fileIndex)}
-                                  className="text-red-500 hover:text-red-700"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
+                                <div className="flex items-center space-x-1">
+                                  {file.fileUrl && (
+                                    <a
+                                      href={file.fileUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-blue-500 hover:text-blue-700"
+                                      title="View in ACC"
+                                    >
+                                      <Download className="h-3 w-3" />
+                                    </a>
+                                  )}
+                                  <button
+                                    onClick={() => handleRemoveAttachment(expense.id, fileIndex)}
+                                    className="text-red-500 hover:text-red-700"
+                                    title="Remove attachment"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>

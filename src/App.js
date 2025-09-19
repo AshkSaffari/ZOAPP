@@ -8,7 +8,8 @@ import {
   FileText,
   Key,
   AlertTriangle,
-  ImageIcon
+  ImageIcon,
+  RefreshCw
 } from 'lucide-react';
 import AccService from './services/AccService';
 import ProjectList from './components/ProjectList';
@@ -139,9 +140,22 @@ function App() {
           AccService.initialize(updatedCredentials);
           
           // Test authentication by getting hubs (no projects loaded initially)
-          const hubsData = await AccService.getHubs();
-          if (hubsData.length === 0) {
-            throw new Error('No hubs found. Please check your permissions.');
+          console.log('🔍 Testing authentication by fetching hubs...');
+          let hubsData = [];
+          try {
+            hubsData = await AccService.getHubs();
+            console.log('✅ Hubs fetched successfully:', hubsData.length, 'hubs found');
+            
+            if (hubsData.length === 0) {
+              console.warn('⚠️ No hubs found - this might be normal if user has no hub access');
+              // Don't throw error, just show warning and continue
+              console.log('ℹ️ Continuing with empty hub list - user can still use manual token input');
+            }
+          } catch (hubError) {
+            console.error('❌ Error fetching hubs:', hubError);
+            console.log('ℹ️ This might be due to insufficient permissions or API issues');
+            console.log('ℹ️ Continuing anyway - user can still use manual token input');
+            // Don't throw error, just log it and continue
           }
           
           // Clear projects initially - user must select a hub first
@@ -155,6 +169,11 @@ function App() {
           // Show success message
           setError(null);
           console.log('🎉 Sign-in complete! Both 3-legged and 2-legged tokens obtained automatically.');
+          
+          // Show info message if no hubs were found
+          if (hubsData && hubsData.length === 0) {
+            console.log('ℹ️ No hubs found - you can still use the app with manual token input');
+          }
           
           // Clear URL parameters
           window.history.replaceState({}, document.title, window.location.pathname);
@@ -183,9 +202,26 @@ function App() {
         AccService.initialize(credentials);
         
         // Test authentication by getting hubs
-        const hubsData = await AccService.getHubs();
-        if (hubsData.length === 0) {
-          throw new Error('No hubs found. Please check your permissions.');
+        console.log('🔍 Testing authentication by fetching hubs...');
+        let hubsData = [];
+        try {
+          hubsData = await AccService.getHubs();
+          console.log('✅ Hubs fetched successfully:', hubsData.length, 'hubs found');
+          
+          if (hubsData.length === 0) {
+            console.warn('⚠️ No hubs found - this might be normal if user has no hub access');
+            console.log('ℹ️ This could be due to:');
+            console.log('ℹ️ 1. User account has no hub permissions');
+            console.log('ℹ️ 2. Token scopes are insufficient');
+            console.log('ℹ️ 3. User is not a member of any hubs');
+            console.log('ℹ️ Continuing anyway - user can still use manual token input');
+            // Don't throw error, just continue
+          }
+        } catch (hubError) {
+          console.error('❌ Error fetching hubs:', hubError);
+          console.log('ℹ️ This might be due to insufficient permissions or API issues');
+          console.log('ℹ️ Continuing anyway - user can still use manual token input');
+          // Don't throw error, just log it and continue
         }
         
         // Clear projects initially - user must select a hub first
@@ -193,6 +229,12 @@ function App() {
         setSelectedProject(null);
         setSelectedHub(null);
         setIsAuthenticated(true);
+        
+        // Show info message if no hubs were found
+        if (hubsData && hubsData.length === 0) {
+          console.log('ℹ️ No hubs found - you can still use the app with manual token input');
+        }
+        
         return;
       }
       
@@ -267,6 +309,28 @@ function App() {
       ...prev,
       threeLegToken: ''
     }));
+  };
+
+  const handleRefreshToken = async () => {
+    try {
+      console.log('🔄 Attempting manual token refresh...');
+      const result = await AccService.manualRefreshToken();
+      
+      if (result.success) {
+        console.log('✅ Token refreshed successfully');
+        alert('Token refreshed successfully!');
+        // Reload the page to reinitialize everything
+        window.location.reload();
+      } else {
+        console.error('❌ Token refresh failed:', result.message);
+        alert('Token refresh failed: ' + result.message + '\n\nPlease sign in again.');
+        handleLogout();
+      }
+    } catch (error) {
+      console.error('❌ Token refresh error:', error);
+      alert('Token refresh failed: ' + error.message + '\n\nPlease sign in again.');
+      handleLogout();
+    }
   };
 
 
@@ -455,16 +519,26 @@ function App() {
               </h1>
             </div>
             <div className="flex items-center space-x-4">
+              
               <span className="text-sm text-gray-500">
                 3-Leg Token
               </span>
-              <button
-                onClick={handleLogout}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-              >
-                <LogOut className="h-4 w-4 mr-2" />
-                Sign Out
-              </button>
+              <div className="flex space-x-2">
+                <button
+                  onClick={handleRefreshToken}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh Token
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                >
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Sign Out
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -676,7 +750,7 @@ function App() {
           ) : activeTab === 'timesheets' ? (
             <div className="bg-white shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
-                <TimesheetTab projects={projects} credentials={credentials} />
+                <TimesheetTab selectedHub={selectedHub} projects={projects} credentials={credentials} />
               </div>
             </div>
           ) : null}

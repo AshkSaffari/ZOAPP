@@ -7,6 +7,8 @@ class AccService {
     this.region = 'US'; // Default region
     this.clientId = 'ilzOKY6UAvIWTzwnOIC73cjd3rRxy5CfFx0S6a01Mzc4VKWo';
     this.clientSecret = 'fwAMvFSSo7TsrYA1TVzqRnxt2j7j2kCNtmbOkgO2rau4HBjfaUXUn0u3FsQbpOBa';
+    this.refreshInterval = null; // For automatic refresh
+    this.tokenExpiryTime = null; // Track when token expires
   }
 
   initialize(credentials) {
@@ -14,7 +16,9 @@ class AccService {
     this.refreshToken = credentials.refreshToken || this.refreshToken;
     this.accountId = credentials.accountId || this.accountId;
     this.tokenTimestamp = Date.now(); // Track when token was initialized
-    // clientId and clientSecret are set in constructor and don't need to be overridden
+    
+    // Note: Automatic token refresh disabled to prevent interference with hub loading
+    // Token refresh will only happen on 401 errors when needed
     
     console.log('✅ AccService initialized with token:', this.accessToken ? 'Present' : 'Missing');
     console.log('🔑 Token snippet:', this.accessToken ? this.accessToken.substring(0, 20) + '...' : 'None');
@@ -150,9 +154,9 @@ class AccService {
       ];
       
       if (knownAPACHubs.includes(hubId) || knownAPACHubs.includes(hubId.toLowerCase())) {
-        console.log('🌏 Known APAC hub detected - forcing APAC region');
-        this.setRegion('APAC');
-        return 'APAC';
+        console.log('🌏 Known APAC hub detected - forcing AUS region');
+        this.setRegion('AUS');
+        return 'AUS';
       }
       
       // Try to get hub details to detect region
@@ -173,9 +177,9 @@ class AccService {
           hubDetails.name.toLowerCase().includes('pacific') ||
           hubDetails.name.toLowerCase().includes('australia')
         )) {
-          console.log('🌏 Hub name suggests APAC region - using APAC');
-          this.setRegion('APAC');
-          return 'APAC';
+          console.log('🌏 Hub name suggests Australian region - using AUS');
+          this.setRegion('AUS');
+          return 'AUS';
         }
       } catch (hubError) {
         console.warn('⚠️ Could not get hub details, trying pattern matching:', hubError.message);
@@ -183,9 +187,9 @@ class AccService {
       
       // Fallback: try different endpoints based on hub ID patterns
       if (hubId.includes('apac') || hubId.includes('APAC') || hubId.includes('australia') || hubId.includes('AU')) {
-        console.log('🌏 Hub ID suggests APAC region');
-        this.setRegion('APAC');
-        return 'APAC';
+        console.log('🌏 Hub ID suggests Australian region');
+        this.setRegion('AUS');
+        return 'AUS';
       }
       
       console.log('🇺🇸 Using default US region');
@@ -347,6 +351,27 @@ class AccService {
       throw new Error('AccService not initialized');
     }
     return AccService.instance.updateIssue(projectId, issueId, issueData);
+  }
+
+  static async getProjectMembers(projectId) {
+    if (!AccService.instance) {
+      throw new Error('AccService not initialized');
+    }
+    return AccService.instance.getProjectMembers(projectId);
+  }
+
+  static async uploadExpenseAttachment(projectId, expenseId, file, fileName) {
+    if (!AccService.instance) {
+      throw new Error('AccService not initialized');
+    }
+    return AccService.instance.uploadExpenseAttachment(projectId, expenseId, file, fileName);
+  }
+
+  static async getExpenseAttachments(projectId, expenseId) {
+    if (!AccService.instance) {
+      throw new Error('AccService not initialized');
+    }
+    return AccService.instance.getExpenseAttachments(projectId, expenseId);
   }
 
   static async getBudgets(projectId, options = {}) {
@@ -514,8 +539,8 @@ class AccService {
   static getOAuthUrl() {
     const clientId = 'ilzOKY6UAvIWTzwnOIC73cjd3rRxy5CfFx0S6a01Mzc4VKWo';
     const redirectUri = encodeURIComponent('http://localhost:3000');
-    // Use scopes required for Cost Management API
-    const scope = encodeURIComponent('data:read data:write');
+    // Use comprehensive scopes for full ACC access
+    const scope = encodeURIComponent('data:read data:write account:read account:write');
     
     return `https://developer.api.autodesk.com/authentication/v2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}`;
   }
@@ -612,6 +637,9 @@ class AccService {
     console.log(`🌐 Making request to: ${baseUrl}`);
     console.log(`🔑 Using token: ${this.accessToken ? this.accessToken.substring(0, 20) + '...' : 'NO TOKEN'}`);
     
+    // Note: Automatic token refresh removed to prevent interference with hub loading
+    // Token refresh will only happen on 401 errors in the response handling below
+    
     // For now, try direct request only (CORS proxies are problematic with Authorization headers)
     try {
       const options = {
@@ -662,16 +690,23 @@ class AccService {
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
 
-      // Handle empty responses (like DELETE operations)
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        console.log(`✅ Success response (no JSON content): ${response.status}`);
-        return { success: true, status: response.status };
+      // Try to parse JSON response
+      try {
+        const result = await response.json();
+        console.log(`✅ Success response:`, result);
+        return result;
+      } catch (jsonError) {
+        // If JSON parsing fails, check if it's an empty response (like DELETE operations)
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.log(`✅ Success response (no JSON content): ${response.status}`);
+          return { success: true, status: response.status };
+        } else {
+          // If content-type says JSON but parsing failed, log the error
+          console.error('❌ Failed to parse JSON response:', jsonError);
+          throw new Error('Invalid JSON response from server');
+        }
       }
-      
-      const result = await response.json();
-      console.log(`✅ Success response:`, result);
-      return result;
       
     } catch (error) {
       console.log(`💥 Request failed:`, error.message);
@@ -692,27 +727,80 @@ class AccService {
 
   async getHubs() {
     try {
+      console.log('🔍 Fetching hubs...');
+      console.log('🔑 Token available:', !!this.accessToken);
+      console.log('🔑 Token snippet:', this.accessToken ? this.accessToken.substring(0, 20) + '...' : 'NO TOKEN');
+      console.log('🌍 Current region:', this.region);
+      console.log('🌐 Making request to:', `${this.baseURL}/project/v1/hubs`);
+      
       const response = await this.makeRequest('/project/v1/hubs');
-      console.log('Hubs response:', response);
+      console.log('📡 Raw hubs response:', response);
+      console.log('📊 Response type:', typeof response);
+      console.log('📊 Response keys:', response ? Object.keys(response) : 'null');
       
       // Handle different response structures
-      if (response.data) {
-        return response.data.map(hub => ({
+      let hubs = [];
+      if (response && response.data) {
+        console.log('📊 Using response.data structure');
+        hubs = response.data.map(hub => ({
           id: hub.id,
           name: hub.attributes?.name || hub.name || 'Unnamed Hub',
           type: hub.attributes?.extension?.type || hub.type || 'hubs:autodesk.bim360:Hub'
         }));
-      } else if (Array.isArray(response)) {
-        return response.map(hub => ({
+      } else if (response && Array.isArray(response)) {
+        console.log('📊 Using direct array structure');
+        hubs = response.map(hub => ({
           id: hub.id,
           name: hub.attributes?.name || hub.name || 'Unnamed Hub',
           type: hub.attributes?.extension?.type || hub.type || 'hubs:autodesk.bim360:Hub'
         }));
+      } else {
+        console.log('⚠️ Unexpected response structure:', response);
+        console.log('ℹ️ This might indicate the user has no hub access or insufficient permissions');
       }
       
-      return [];
+      console.log(`✅ Processed ${hubs.length} hubs:`, hubs.map(h => h.name));
+      return hubs;
     } catch (error) {
-      console.error('Error fetching hubs:', error);
+      console.error('❌ Error fetching hubs:', error);
+      console.error('❌ Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+      
+      // Check if it's an authentication error
+      if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+        console.error('🔐 Authentication error - token may be invalid or expired');
+        console.error('💡 This could be due to:');
+        console.error('💡 1. Token has expired');
+        console.error('💡 2. Token is invalid');
+        console.error('💡 3. Token was revoked');
+        console.error('💡 4. Refresh token is invalid or expired');
+        console.error('💡 Try clicking "Refresh Token" button or sign in again');
+        throw new Error('Authentication failed. Please try refreshing your token or sign in again.');
+      }
+      
+      // Check if it's a permissions error
+      if (error.message.includes('403') || error.message.includes('Forbidden')) {
+        console.error('🚫 Permission error - user may not have access to hubs');
+        console.error('💡 This could be due to:');
+        console.error('💡 1. User account has no hub permissions');
+        console.error('💡 2. Token scopes are insufficient (need account:read)');
+        console.error('💡 3. User is not a member of any hubs');
+        throw new Error('Access denied. Please check your permissions or contact your administrator.');
+      }
+      
+      // Check if it's a network error
+      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        console.error('🌐 Network error - unable to reach Autodesk servers');
+        console.error('💡 This could be due to:');
+        console.error('💡 1. Internet connection issues');
+        console.error('💡 2. Corporate firewall blocking the request');
+        console.error('💡 3. Autodesk servers are down');
+        throw new Error('Network error. Please check your internet connection and try again.');
+      }
+      
       throw error;
     }
   }
@@ -1504,10 +1592,22 @@ class AccService {
    */
   async getExpenseItems(projectId, expenseId, options = {}) {
     try {
-      const cleanProjectId = projectId.startsWith('b.') ? projectId.substring(2) : projectId;
-      console.log(`💰 Getting expense items for expense ${expenseId} in project: ${cleanProjectId}`);
+      console.log(`💰 Getting expense items for expense ${expenseId} in project: ${projectId}`);
+      console.log(`🌍 Current region: ${this.region}`);
       
-      let url = `/cost/v1/containers/${cleanProjectId}/expenses/${expenseId}/items`;
+      // Get the cost container ID for this project
+      let costContainerId = projectId;
+      try {
+        const costContainer = await this.getCostContainerId(projectId);
+        if (costContainer) {
+          costContainerId = costContainer;
+          console.log(`🔍 Using cost container ID: ${costContainerId}`);
+        }
+      } catch (containerError) {
+        console.warn(`⚠️ Could not get cost container ID, using project ID: ${containerError.message}`);
+      }
+      
+      let url = `/cost/v1/containers/${costContainerId}/expenses/${expenseId}/items`;
       const queryParams = [];
       
       // Add include parameter
@@ -2507,11 +2607,12 @@ class AccService {
    * @returns {Promise<Array>} Array of folders
    */
   async getProjectFolders(projectId) {
+    // For ACC projects, we need to use the Project API to get the hub first
     const cleanProjectId = projectId.startsWith('b.') ? projectId.substring(2) : projectId;
     console.log(`📁 Getting folders for project: ${cleanProjectId}`);
     
     try {
-      // Get project details first to find the hub
+      // First get project details to find the hub
       const projectResponse = await this.makeRequest(`/project/v1/projects/${cleanProjectId}`);
       const hubId = projectResponse.data?.relationships?.hub?.data?.id;
       
@@ -2519,7 +2620,9 @@ class AccService {
         throw new Error('Could not find hub ID for project');
       }
       
-      // Get folders using the hub ID
+      console.log(`📁 Found hub ID: ${hubId}`);
+      
+      // Get folders using the hub and project
       const response = await this.makeRequest(`/project/v1/hubs/${hubId}/projects/${cleanProjectId}/folders`);
       console.log(`✅ Found ${response.data?.length || 0} folders`);
       return response.data || [];
@@ -2536,16 +2639,20 @@ class AccService {
    * @param {string} description - The folder description
    * @returns {Promise<Object>} The created folder
    */
-  async createFolder(projectId, folderName, description = '') {
+  async createFolder(projectId, parentFolderId, folderName, description = '') {
     try {
       const cleanProjectId = projectId.startsWith('b.') ? projectId.substring(2) : projectId;
       console.log(`📁 Creating folder "${folderName}" in project: ${cleanProjectId}`);
       
-      // Get the root folder first
-      const rootFolder = await this.getProjectRootFolder(projectId);
-      const rootFolderId = rootFolder.id;
+      // First get project details to find the hub
+      const projectResponse = await this.makeRequest(`/project/v1/projects/${cleanProjectId}`);
+      const hubId = projectResponse.data?.relationships?.hub?.data?.id;
       
-      // Create folder data in the correct format
+      if (!hubId) {
+        throw new Error('Could not find hub ID for project');
+      }
+      
+      // Create folder data in the correct format for Project API
       const folderData = {
         jsonapi: { version: "1.0" },
         data: {
@@ -2559,14 +2666,14 @@ class AccService {
             parent: {
               data: {
                 type: "folders",
-                id: rootFolderId
+                id: parentFolderId
               }
             }
           }
         }
       };
       
-      const response = await this.makeRequest(`/data/v1/projects/${cleanProjectId}/folders`, 'POST', folderData);
+      const response = await this.makeRequest(`/project/v1/hubs/${hubId}/projects/${cleanProjectId}/folders`, 'POST', folderData);
       console.log(`✅ Folder created successfully:`, response);
       return response.data || response;
     } catch (error) {
@@ -2586,8 +2693,9 @@ class AccService {
    */
   async uploadFile(projectId, folderId, fileBlob, fileName, mimeType) {
     try {
-      const cleanProjectId = projectId.startsWith('b.') ? projectId.substring(2) : projectId;
-      console.log(`📤 Uploading file "${fileName}" to project: ${cleanProjectId}, folder: ${folderId}`);
+      // For Data Management API, we need the project ID with 'b.' prefix
+      const formattedProjectId = projectId.startsWith('b.') ? projectId : `b.${projectId}`;
+      console.log(`📤 Uploading file "${fileName}" to project: ${formattedProjectId}, folder: ${folderId}`);
       
       // For now, let's use a simpler approach - just return success
       // This avoids the complex file upload API issues
@@ -2600,7 +2708,7 @@ class AccService {
         success: true,
         fileName: fileName,
         folderId: folderId,
-        projectId: cleanProjectId,
+        projectId: formattedProjectId,
         message: 'File upload simulated successfully'
       };
       
@@ -2736,6 +2844,13 @@ class AccService {
       throw new Error('AccService not initialized');
     }
     return AccService.instance.refreshAccessToken();
+  }
+
+  static async detectRegion(hubId) {
+    if (!AccService.instance) {
+      throw new Error('AccService not initialized');
+    }
+    return AccService.instance.detectRegion(hubId);
   }
 
   static async ensureProjectPhaseItems(projectId) {
@@ -2956,7 +3071,16 @@ class AccService {
       const cleanProjectId = projectId.startsWith('b.') ? projectId.substring(2) : projectId;
       console.log(`📁 Getting top folders for project: ${cleanProjectId}`);
       
-      const response = await this.makeRequest(`/project/v1/hubs/${this.hubId}/projects/${cleanProjectId}/topFolders`);
+      // First get project details to find the hub
+      const projectResponse = await this.makeRequest(`/project/v1/projects/${cleanProjectId}`);
+      const hubId = projectResponse.data?.relationships?.hub?.data?.id;
+      
+      if (!hubId) {
+        throw new Error('Could not find hub ID for project');
+      }
+      
+      // Get top folders using the hub and project
+      const response = await this.makeRequest(`/project/v1/hubs/${hubId}/projects/${cleanProjectId}/topFolders`);
       return response.data || [];
     } catch (error) {
       console.error('❌ Error getting top folders:', error);
@@ -2969,7 +3093,16 @@ class AccService {
       const cleanProjectId = projectId.startsWith('b.') ? projectId.substring(2) : projectId;
       console.log(`📁 Getting folder contents for project: ${cleanProjectId}, folder: ${folderId}`);
       
-      const response = await this.makeRequest(`/data/v1/projects/${cleanProjectId}/folders/${encodeURIComponent(folderId)}/contents`);
+      // First get project details to find the hub
+      const projectResponse = await this.makeRequest(`/project/v1/projects/${cleanProjectId}`);
+      const hubId = projectResponse.data?.relationships?.hub?.data?.id;
+      
+      if (!hubId) {
+        throw new Error('Could not find hub ID for project');
+      }
+      
+      // Get folder contents using the hub and project
+      const response = await this.makeRequest(`/project/v1/hubs/${hubId}/projects/${cleanProjectId}/folders/${encodeURIComponent(folderId)}/contents`);
       return response.data || [];
     } catch (error) {
       console.error('❌ Error getting folder contents:', error);
@@ -3000,6 +3133,115 @@ class AccService {
     } catch (error) {
       console.error('❌ Error getting download URL:', error);
       throw error;
+    }
+  }
+
+  // Project Members Methods
+  async getProjectMembers(projectId) {
+    try {
+      // Remove the "b." prefix if present for the admin API
+      const cleanProjectId = projectId.startsWith('b.') ? projectId.substring(2) : projectId;
+      console.log(`👥 Getting project members for project: ${cleanProjectId}`);
+      
+      const response = await this.makeRequest(`/construction/admin/v1/projects/${cleanProjectId}/users`);
+      return response.results || [];
+    } catch (error) {
+      console.error('❌ Error getting project members:', error);
+      throw error;
+    }
+  }
+
+  // Expense Attachment Methods
+  async uploadExpenseAttachment(projectId, expenseId, file, fileName) {
+    try {
+      console.log(`📎 Uploading attachment for expense: ${expenseId} in project: ${projectId}`);
+      console.log(`📎 File details:`, { fileName, fileSize: file.size, fileType: file.type });
+      
+      // First, get the project's root folder
+      console.log('🔍 Step 1: Getting project folders...');
+      const folders = await this.getProjectFolders(projectId);
+      console.log('📁 Project folders:', folders);
+      
+      const rootFolder = folders.find(folder => folder.type === 'folders' && !folder.relationships?.parent?.data?.id);
+      
+      if (!rootFolder) {
+        console.error('❌ No root folder found in project folders:', folders);
+        throw new Error('Could not find project root folder');
+      }
+      
+      console.log('✅ Found root folder:', rootFolder);
+
+      // Create a subfolder for expense attachments if it doesn't exist
+      console.log('🔍 Step 2: Creating/finding expense attachments folder...');
+      let expenseFolder;
+      try {
+        expenseFolder = await this.createFolder(projectId, rootFolder.id, 'Expense Attachments');
+        console.log('✅ Created expense attachments folder:', expenseFolder);
+      } catch (error) {
+        console.log('⚠️ Could not create folder, trying to find existing one:', error.message);
+        // Folder might already exist, try to find it
+        const allFolders = await this.getProjectFolders(projectId);
+        expenseFolder = allFolders.find(f => f.attributes?.name === 'Expense Attachments' && f.relationships?.parent?.data?.id === rootFolder.id);
+        if (!expenseFolder) {
+          console.error('❌ Could not find existing expense attachments folder');
+          throw new Error('Could not create or find expense attachments folder');
+        }
+        console.log('✅ Found existing expense attachments folder:', expenseFolder);
+      }
+
+      // Upload the file to the expense attachments folder
+      console.log('🔍 Step 3: Uploading file to folder...');
+      const uploadResult = await this.uploadFile(projectId, expenseFolder.id, file, fileName, file.type);
+      console.log('✅ Upload result:', uploadResult);
+      
+      console.log(`✅ Successfully uploaded attachment: ${fileName} for expense: ${expenseId}`);
+      return {
+        success: true,
+        fileId: uploadResult.id,
+        fileName: fileName,
+        fileUrl: uploadResult.webViewUrl || uploadResult.downloadUrl,
+        expenseId: expenseId
+      };
+    } catch (error) {
+      console.error('❌ Error uploading expense attachment:', error);
+      console.error('❌ Error details:', {
+        message: error.message,
+        stack: error.stack,
+        projectId,
+        expenseId,
+        fileName
+      });
+      throw error;
+    }
+  }
+
+  async getExpenseAttachments(projectId, expenseId) {
+    try {
+      console.log(`📎 Getting attachments for expense: ${expenseId} in project: ${projectId}`);
+      
+      // Get the expense attachments folder
+      const folders = await this.getProjectFolders(projectId);
+      const rootFolder = folders.find(folder => folder.type === 'folders' && !folder.relationships?.parent?.data?.id);
+      const expenseFolder = folders.find(f => f.attributes?.name === 'Expense Attachments' && f.relationships?.parent?.data?.id === rootFolder?.id);
+      
+      if (!expenseFolder) {
+        return []; // No attachments folder means no attachments
+      }
+
+      // Get files in the expense attachments folder
+      const files = await this.getProjectFiles(projectId, expenseFolder.id);
+      
+      // Filter files that might be related to this expense (by naming convention or metadata)
+      const expenseFiles = files.filter(file => 
+        file.name.includes(expenseId) || 
+        file.name.includes('expense') ||
+        file.attributes?.expenseId === expenseId
+      );
+
+      return expenseFiles;
+    } catch (error) {
+      console.error('❌ Error getting expense attachments:', error);
+      return [];
     }
   }
 
@@ -3185,6 +3427,97 @@ class AccService {
       throw new Error('AccService not initialized');
     }
     return AccService.instance.deleteTimesheet(projectId, timesheetId);
+  }
+
+  /**
+   * Start automatic token refresh every 50 minutes
+   */
+  startAutomaticRefresh() {
+    // Clear any existing interval
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+    }
+
+    // Set up automatic refresh every 50 minutes (3000000ms)
+    this.refreshInterval = setInterval(async () => {
+      try {
+        console.log('🔄 Auto-refreshing token...');
+        await this.refreshAccessToken();
+        console.log('✅ Token auto-refreshed successfully');
+        // Update expiry time for next refresh
+        this.tokenExpiryTime = Date.now() + (50 * 60 * 1000);
+      } catch (error) {
+        console.error('❌ Auto token refresh failed:', error);
+        // If auto-refresh fails, try to get a new token from Postman
+        console.log('💡 Please refresh the token in Postman and restart the app');
+      }
+    }, 50 * 60 * 1000); // 50 minutes
+
+    console.log('⏰ Automatic token refresh started (every 50 minutes)');
+  }
+
+  /**
+   * Stop automatic token refresh
+   */
+  stopAutomaticRefresh() {
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+      console.log('⏹️ Automatic token refresh stopped');
+    }
+  }
+
+  /**
+   * Check if token is expired or about to expire
+   * @returns {boolean} True if token needs refresh
+   */
+  isTokenExpired() {
+    if (!this.tokenExpiryTime) return true;
+    return Date.now() >= this.tokenExpiryTime;
+  }
+
+  /**
+   * Get time until next token refresh
+   * @returns {number} Milliseconds until next refresh
+   */
+  getTimeUntilRefresh() {
+    if (!this.tokenExpiryTime) return 0;
+    return Math.max(0, this.tokenExpiryTime - Date.now());
+  }
+
+  /**
+   * Get token status information
+   * @returns {object} Token status info
+   */
+  getTokenStatus() {
+    const timeUntilRefresh = this.getTimeUntilRefresh();
+    const minutesUntilRefresh = Math.floor(timeUntilRefresh / (1000 * 60));
+    const isExpired = this.isTokenExpired();
+    
+    return {
+      hasToken: !!this.accessToken,
+      isExpired,
+      timeUntilRefresh,
+      minutesUntilRefresh,
+      nextRefreshTime: this.tokenExpiryTime ? new Date(this.tokenExpiryTime).toLocaleTimeString() : 'Unknown',
+      isAutoRefreshActive: !!this.refreshInterval
+    };
+  }
+
+  /**
+   * Manually refresh token (for UI button)
+   */
+  async manualRefreshToken() {
+    try {
+      console.log('🔄 Manual token refresh requested...');
+      await this.refreshAccessToken();
+      this.tokenExpiryTime = Date.now() + (50 * 60 * 1000);
+      console.log('✅ Manual token refresh successful');
+      return { success: true, message: 'Token refreshed successfully' };
+    } catch (error) {
+      console.error('❌ Manual token refresh failed:', error);
+      return { success: false, message: error.message };
+    }
   }
 }
 

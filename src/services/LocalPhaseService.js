@@ -259,6 +259,10 @@ class LocalPhaseService {
 
     console.log('🔍 Current history before add:', this.phases[projectId].history);
 
+    // Set the new phase as current
+    this.phases[projectId].current = phaseData.phase;
+    console.log('🔍 Set current phase to:', phaseData.phase);
+
     // Add to history
     this.phases[projectId].history.push(phaseData);
     
@@ -270,7 +274,7 @@ class LocalPhaseService {
     }
     
     this.savePhases();
-    console.log('✅ Phase added successfully');
+    console.log('✅ Phase added and set as current successfully');
   }
 
   // Remove phase by index

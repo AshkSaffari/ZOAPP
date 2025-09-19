@@ -267,25 +267,6 @@ const ImageTab = ({ projects, credentials }) => {
                   'Get Token'
                 )}
               </button>
-              <button
-                onClick={() => {
-                  if (twoLeggedToken) {
-                    navigator.clipboard.writeText(twoLeggedToken).then(() => {
-                      setUploadStatus('2-legged token copied to clipboard!');
-                      console.log('📋 2-legged token copied to clipboard');
-                    }).catch(err => {
-                      console.error('Failed to copy token:', err);
-                      setError('Failed to copy token to clipboard');
-                    });
-                  } else {
-                    setError('No token to copy');
-                  }
-                }}
-                disabled={!twoLeggedToken}
-                className="px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Copy Token
-              </button>
             </div>
             {twoLeggedToken ? (
               <p className="text-xs text-green-600 mt-2">

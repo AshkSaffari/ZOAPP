@@ -89,15 +89,17 @@ const PhaseManager = ({ project, onPhaseUpdate, credentials }) => {
       
       console.log('✅ Phase added to service, reloading phases...');
       
-      // Reload phases
+      // Reload phases and current phase
       loadProjectPhases();
+      const updatedCurrentPhase = LocalPhaseService.getProjectPhase(project.id);
+      setCurrentPhase(updatedCurrentPhase);
       
       // Clear form
       setNewPhase('');
       setNewPhaseDate('');
       
       setSuccess(true);
-      console.log(`✅ Phase added for project ${project.id}: ${newPhase} on ${newPhaseDate}`);
+      console.log(`✅ Phase added and set as current for project ${project.id}: ${newPhase} on ${newPhaseDate}`);
       
       // Clear success message after 3 seconds
       setTimeout(() => {

@@ -21,10 +21,9 @@ const HubSelector = ({ onHubSelect, selectedHub, credentials }) => {
     try {
       AccService.initialize(credentials);
       const hubsData = await AccService.getHubs();
-      setHubs(hubsData);
+      setHubs(hubsData || []);
     } catch (err) {
       setError(err.message || 'Failed to load hubs');
-      console.error('Error loading hubs:', err);
     } finally {
       setIsLoading(false);
     }
@@ -35,9 +34,6 @@ const HubSelector = ({ onHubSelect, selectedHub, credentials }) => {
     setIsOpen(false);
   };
 
-  const handleRefresh = () => {
-    loadHubs();
-  };
 
   if (isLoading) {
     return (
@@ -54,12 +50,6 @@ const HubSelector = ({ onHubSelect, selectedHub, credentials }) => {
     <div className="bg-white p-4 rounded-lg shadow-sm border">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-medium text-gray-900">Hub Selection</h3>
-        <button
-          onClick={handleRefresh}
-          className="text-sm text-autodesk-blue hover:text-autodesk-dark"
-        >
-          Refresh
-        </button>
       </div>
 
       {error && (
@@ -68,10 +58,14 @@ const HubSelector = ({ onHubSelect, selectedHub, credentials }) => {
             <AlertCircle className="h-4 w-4 text-red-400" />
             <div className="ml-3">
               <p className="text-sm text-red-800">{error}</p>
+              <p className="text-xs text-red-600 mt-1">
+                Check the browser console for detailed debugging information
+              </p>
             </div>
           </div>
         </div>
       )}
+
 
       <div className="relative">
         <button
@@ -89,11 +83,17 @@ const HubSelector = ({ onHubSelect, selectedHub, credentials }) => {
 
         {isOpen && (
           <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-            {hubs.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-gray-500">
-                No hubs available
-              </div>
-            ) : (
+        {hubs.length === 0 ? (
+          <div className="px-3 py-2 text-sm text-gray-500">
+            <div className="text-center py-4">
+              <Building2 className="mx-auto h-8 w-8 text-gray-400 mb-2" />
+              <p className="font-medium">No hubs available</p>
+              <p className="text-xs text-gray-400 mt-1">
+                This might be due to insufficient permissions or no hub access
+              </p>
+            </div>
+          </div>
+        ) : (
               hubs.map((hub) => (
                 <button
                   key={hub.id}

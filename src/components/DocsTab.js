@@ -11,39 +11,25 @@ const DocsTab = () => {
   const [projects, setProjects] = useState([]);
   const [selectedProjects, setSelectedProjects] = useState([]);
   const [searchScope, setSearchScope] = useState('all'); // 'all', 'project', 'hub'
-  const [fileTypeFilter, setFileTypeFilter] = useState('all'); // 'all', 'pdf', 'xlsx', 'docx', 'image'
-  const [filteredResults, setFilteredResults] = useState([]);
+  const [projectSearchTerm, setProjectSearchTerm] = useState(''); // For filtering projects
+  const [filteredProjects, setFilteredProjects] = useState([]);
 
   // Load hubs on component mount
   useEffect(() => {
     loadHubs();
   }, []);
 
-  // Filter results based on file type
+  // Filter projects based on search term
   useEffect(() => {
-    if (fileTypeFilter === 'all') {
-      setFilteredResults(searchResults);
+    if (!projectSearchTerm.trim()) {
+      setFilteredProjects(projects);
     } else {
-      const filtered = searchResults.filter(result => {
-        const fileName = result.name?.toLowerCase() || '';
-        switch (fileTypeFilter) {
-          case 'pdf':
-            return fileName.endsWith('.pdf');
-          case 'xlsx':
-            return fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
-          case 'docx':
-            return fileName.endsWith('.docx') || fileName.endsWith('.doc');
-          case 'image':
-            return fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') || 
-                   fileName.endsWith('.png') || fileName.endsWith('.gif') || 
-                   fileName.endsWith('.bmp') || fileName.endsWith('.svg');
-          default:
-            return true;
-        }
-      });
-      setFilteredResults(filtered);
+      const filtered = projects.filter(project =>
+        project.name.toLowerCase().includes(projectSearchTerm.toLowerCase())
+      );
+      setFilteredProjects(filtered);
     }
-  }, [searchResults, fileTypeFilter]);
+  }, [projectSearchTerm, projects]);
 
   const loadHubs = async () => {
     try {
@@ -68,6 +54,7 @@ const DocsTab = () => {
         await AccService.debugAPACHubAccess(hubId);
         const projectsData = await AccService.getProjects(hubId);
         setProjects(projectsData);
+        setFilteredProjects(projectsData);
       } catch (retryError) {
         console.error('❌ Failed to load projects after retry:', retryError);
         throw retryError;
@@ -331,21 +318,6 @@ const DocsTab = () => {
                 </div>
               </div>
 
-              {/* File Type Filter */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">File Type Filter</label>
-                <select
-                  value={fileTypeFilter}
-                  onChange={(e) => setFileTypeFilter(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="all">All File Types</option>
-                  <option value="pdf">PDF Documents</option>
-                  <option value="xlsx">Excel Spreadsheets</option>
-                  <option value="docx">Word Documents</option>
-                  <option value="image">Images</option>
-                </select>
-              </div>
             </div>
 
             {/* Hub Selection */}
@@ -371,8 +343,23 @@ const DocsTab = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-3">
                   Select Projects to Search from {selectedHub.name}
                 </label>
+                
+                {/* Project Search Filter */}
+                <div className="mb-3">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                    <input
+                      type="text"
+                      placeholder="Search projects..."
+                      value={projectSearchTerm}
+                      onChange={(e) => setProjectSearchTerm(e.target.value)}
+                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+                
                 <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-md p-3 space-y-2">
-                  {projects.map(project => (
+                  {filteredProjects.map(project => (
                     <label key={project.id} className="flex items-center">
                       <input
                         type="checkbox"
@@ -401,7 +388,7 @@ const DocsTab = () => {
           <div className="px-6 py-4 border-b border-gray-200">
             <h3 className="text-lg font-medium text-gray-900 flex items-center">
               <FileText className="h-5 w-5 mr-2 text-gray-600" />
-              Search Results ({filteredResults.length} of {searchResults.length})
+              Search Results ({searchResults.length})
             </h3>
           </div>
           
@@ -430,7 +417,7 @@ const DocsTab = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredResults.map((doc, index) => {
+                {searchResults.map((doc, index) => {
                   const fileName = doc.displayName || doc.name || 'Unknown';
                   const fileExtension = fileName.split('.').pop()?.toLowerCase();
                   
@@ -498,12 +485,12 @@ const DocsTab = () => {
               </tbody>
             </table>
             
-            {filteredResults.length === 0 && searchResults.length > 0 && (
+            {searchResults.length === 0 && (
               <div className="text-center py-8">
                 <Filter className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No files match the selected filter</h3>
+                <h3 className="mt-2 text-sm font-medium text-gray-900">No documents found</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  Try changing the file type filter to see more results
+                  Try adjusting your search terms or project selection
                 </p>
               </div>
             )}
