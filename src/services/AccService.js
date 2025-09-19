@@ -34,7 +34,7 @@ class AccService {
         console.log('🇦🇺 Region set to AUS - using Australian endpoints');
         break;
       case 'APAC':
-        this.baseURL = 'https://developer.api.autodesk.com';
+        this.baseURL = 'https://developer.api.autodesk.com';Y
         console.log('🌏 Region set to APAC - using APAC endpoints');
         break;
       case 'EMEA':
