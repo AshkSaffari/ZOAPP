@@ -42,7 +42,7 @@ A comprehensive React application for integrating with Autodesk Construction Clo
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/AshSaffari/ACC-Autodesk.git
+git clone https://github.com/AshkSaffari/ACC-Autodesk.git
 cd ACC-Autodesk
 ```
 
@@ -181,7 +181,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Ash Saffari**
 - Email: khashayar.saffari@gmail.com
-- GitHub: [@AshSaffari](https://github.com/AshSaffari)
+- GitHub: [@AshkSaffari](https://github.com/AshkSaffari)
 
 ## 🙏 Acknowledgments
 
@@ -200,4 +200,3 @@ For support and questions:
 ---
 
 **Built with ❤️ for the Autodesk Construction Cloud ecosystem**
-
